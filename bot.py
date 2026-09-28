@@ -3,8 +3,11 @@ MedQuiz AI - Production Telegram Bot Entrypoint
 Initializes Database, AI Provider, Scheduler, Handlers, and starts the polling event loop.
 """
 
+import os
 import sys
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Ensure UTF-8 output encoding on Windows consoles
 if sys.platform == "win32":
@@ -52,6 +55,33 @@ from handlers.settings import (
     ai_settings_menu, bot_settings_menu, settings_actions_callback,
     get_model_conversation_handler
 )
+
+
+class RenderHealthCheckHandler(BaseHTTPRequestHandler):
+    """Responds to cloud host health-checks (Render, Railway, Fly.io) to keep web services active."""
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"MedQuiz AI Telegram Bot is Running!\nStatus: 200 OK")
+
+    def do_HEAD(self):
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format, *args):
+        # Silence access logs to keep bot console clean
+        return
+
+
+def start_health_check_server(port: int) -> None:
+    """Runs a minimal HTTP server on the allocated cloud PORT."""
+    try:
+        server = HTTPServer(("0.0.0.0", port), RenderHealthCheckHandler)
+        logger.info(f"Health-check HTTP server listening on 0.0.0.0:{port}")
+        server.serve_forever()
+    except Exception as e:
+        logger.warning(f"Could not bind health-check HTTP server on port {port}: {e}")
 
 
 async def test_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -247,6 +277,15 @@ def main() -> None:
             sys.exit(1)
 
     app = build_application()
+
+    # Cloud Platform Port Binding (Render, Railway, Heroku, etc.)
+    port_env = os.environ.get("PORT")
+    if port_env:
+        port = int(port_env)
+        health_thread = threading.Thread(target=start_health_check_server, args=(port,), daemon=True)
+        health_thread.start()
+        print(f"[*] Cloud Web Service detected: Health-check server listening on port {port}")
+
     print("[*] MedQuiz AI is running! Press Ctrl+C to terminate.")
     app.run_polling(drop_pending_updates=True)
 
